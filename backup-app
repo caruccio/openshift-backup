@@ -44,6 +44,11 @@ for OPT; do
 	shift
 done
 
+if [ ! -r "$TOKEN_FILE" ]; then
+	echo "Arquivo de token nao encontrado: $TOKEN_FILE"
+	exit 1
+fi
+
 set -u
 
 #
