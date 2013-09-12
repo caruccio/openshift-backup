@@ -1,0 +1,102 @@
+#!/bin/bash
+#
+#TODO:
+# - executar snapshot em paralelo
+
+set -e
+
+TOKEN_FILE="${TOKEN_FILE:-/etc/rhc-auth-token}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backup/getup}"
+SSH="`which ssh` -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+
+function usage()
+{
+	cat <<-EOF
+		Use: ${0##*/} [--all|<application>,...]"
+
+		Backup de aplicações OpenShift. Informe o nome de uma ou mais aplicações (sem
+		domínio) nos parâmetros. Use --all para fazer backup de todas as aplicações.
+
+		Os backups são armazenados no diretório $BACKUP_DIR com um repositório git
+		para cada aplicação.
+
+		Crie um token de autorizacao (rhc authorization --help) com escopo apenas
+		leitura e armazene-o no arquivo $TOKEN_FILE.
+
+		Exemplo de token com 12 meses de validade:
+
+		  $ rhc authorization add --scopes read --note backup --expires-in \$((60*60*24*30*12))
+
+		Variaveis de ambiente disponíveis:
+
+		  BACKUP_DIR      Diretorio raiz de backup
+		  TOKEN_FILE      Arquivo do token de autorizacao
+	EOF
+}
+
+APPS=''
+for OPT; do
+	case "$1" in
+		--all) APPS='*';;
+		-h|--help) usage; exit 0;;
+		[a-z-A-Z0-9]) APPS+="$1 "
+	esac
+	shift
+done
+
+set -u
+
+#
+# Le o conteudo de /etc/rhc-auth-token e guarda na variavel "token".
+# Para gerar um novo token, execute o comando abaixo e copie o token para o arquivo /etc/rhc-auth-token
+# O token criado tem validade de um ano.
+#
+#   $ rhc authorization add --scopes read --note backup --expires-in $((60*60*24*30*12))
+#
+echo Auth token: $TOKEN_FILE
+TOKEN="$(<$TOKEN_FILE)"
+
+if [ -z "$APPS" ];  then
+	usage
+	exit 0
+elif [ "$APPS" == '*' ]; then
+	# lista todos os apps
+	APPS=`yes | rhc apps --token "$TOKEN" | awk '/^[a-zA-Z0-9]+ @ http/{print $1}'`
+fi
+
+for APP in $APPS; do
+	# baixa snapshot, cria diretorio se nao existe
+
+	DIR=$BACKUP_DIR/$APP
+	[ -d $DIR ] || mkdir -p $DIR
+	cd $DIR
+
+	echo -n '--- '; date
+	echo Baixando snapshot: $APP
+	# baixa snapshot
+	TIMESTAMP=$(date +%s)
+	TARGZ="snapshot-$APP-$TIMESTAMP.tar.gz"
+	yes | rhc snapshot save --ssh "$SSH" --token "$TOKEN" --app "$APP" --filepath "$TARGZ" 2>&1 | awk '{print "--- " $0}'
+
+	# testa retorno do rhc
+	if [ ${PIPESTATUS[1]} -ne 0 ]; then
+		echo "Snapshot falhou: $APP - $TIMESTAMP"
+		exit 1
+	fi
+
+	# extrai e atualizar repositorio local de backup
+
+	echo -n "Extraindo snapshot... "
+	tar xzf $TARGZ
+	rm -f $TARGZ
+	echo feito
+
+	echo -n "Atualizando backup... "
+	{
+		[ -d .git ] || git init
+		git add .
+		git commit -a -m "Backup automatico: $APP - $(date --date=@$TIMESTAMP)"
+	} >/dev/null
+	echo feito
+done
+
