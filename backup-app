@@ -7,7 +7,6 @@ set -e
 
 TOKEN_FILE="${TOKEN_FILE:-/etc/rhc-auth-token}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backup/getup}"
-SSH="`which ssh` -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
 
 function usage()
 {
@@ -17,11 +16,13 @@ function usage()
 
 		Use: ${0##*/} [--dir=/backup/root/dir] [--all|<application>,...]"
 
-		  --all         Faz backup de todas as aplicações.
-		  --dir=PATH    Define diretório raiz do backup (padrão: $BACKUP_DIR).
+		  -a|--all         Faz backup de todas as aplicações.
+		  -d|--dir=PATH    Define diretório raiz do backup (padrão: $BACKUP_DIR).
+		  -l|--list        List os backups.
 
 		Auth Token
 		----------
+
 		Crie um token de autorizacao (rhc authorization --help) com escopo apenas-leitura
 		e armazene-o no arquivo $TOKEN_FILE.
 
@@ -47,22 +48,55 @@ function usage()
 }
 
 APPS=''
+LIST=0
 for OPT; do
 	case "$1" in
-		--all) APPS='*';;
-		--dir=*) BACKUP_DIR="`echo $1|cut -d= -f2`";;
+		-l|--list) LIST=1;;
+		-a|--all) APPS='*';;
+		-d=*|--dir=*) BACKUP_DIR="`echo $1|cut -d= -f2`";;
 		-*|--*) usage; exit 0;;
 		*) APPS+="$1 "
 	esac
 	shift
 done
 
-if [ ! -r "$TOKEN_FILE" ]; then
-	echo "Arquivo de token nao encontrado: $TOKEN_FILE"
-	exit 1
+
+# lista backups mostrando informacoes basicas
+if [ "$LIST" -eq 1 ]; then
+	if ! cd $BACKUP_DIR 2>/dev/null; then
+		echo "$BACKUP_DIR: Diretorio raiz do backup nao existe"
+		exit 0
+	fi
+
+	APPS=`ls -d1 */ 2>/dev/null`
+	if [ -z "$APPS" ]; then
+		echo "$BACKUP_DIR: Nenhum backup encontrado"
+		exit 0
+	fi
+
+	MAXLEN=0
+	for APP_DIR in $APPS; do
+		[ ${#APP_DIR} -gt $MAXLEN ] && MAXLEN=${#APP_DIR}
+	done
+
+	{
+	echo 'App | Gear-Id | Commit | Ultimo Backup'
+	echo '--- | ------- | ------ | -------------'
+	
+	for APP_DIR in $APPS; do
+		pushd $APP_DIR >/dev/null
+		for APP_GEAR in */; do
+			git log --format="${APP_DIR%/} | ${APP_GEAR%/} | %h | %ai (%ar)" -1
+		done
+		popd >/dev/null
+	done
+	} | column -t  -s\|
+	exit 0
 fi
 
 set -u
+
+echo Backup root dir: $BACKUP_DIR
 
 #
 # Le o conteudo de /etc/rhc-auth-token e guarda na variavel "token".
@@ -70,11 +104,17 @@ set -u
 # O token criado tem validade de um ano.
 #
 #   $ rhc authorization add --scopes read --note backup --expires-in $((60*60*24*30*12))
-#
-echo Backup root dir: $BACKUP_DIR
+if [ ! -r "$TOKEN_FILE" ]; then
+	echo "Arquivo de token nao encontrado: $TOKEN_FILE"
+	exit 1
+fi
+
 echo Auth token file: $TOKEN_FILE
-echo
 TOKEN="$(<$TOKEN_FILE)"
+
+SSH="`which ssh` -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
+
+echo
 
 if [ -z "$APPS" ];  then
 	echo 'Informe um ou mais nomes de aplicaçao ou use o parâmetro "--all"'
