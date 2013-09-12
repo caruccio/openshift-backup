@@ -12,25 +12,37 @@ SSH="`which ssh` -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null"
 function usage()
 {
 	cat <<-EOF
-		Use: ${0##*/} [--all|<application>,...]"
-
 		Backup de aplicações OpenShift. Informe o nome de uma ou mais aplicações (sem
-		domínio) nos parâmetros. Use --all para fazer backup de todas as aplicações.
+		domínio) nos parâmetros.
 
-		Os backups são armazenados no diretório $BACKUP_DIR com um repositório git
-		para cada aplicação.
+		Use: ${0##*/} [--dir=/backup/root/dir] [--all|<application>,...]"
 
-		Crie um token de autorizacao (rhc authorization --help) com escopo apenas
-		leitura e armazene-o no arquivo $TOKEN_FILE.
+		  --all         Faz backup de todas as aplicações.
+		  --dir=PATH    Define diretório raiz do backup (padrão: $BACKUP_DIR).
+
+		Auth Token
+		----------
+		Crie um token de autorizacao (rhc authorization --help) com escopo apenas-leitura
+		e armazene-o no arquivo $TOKEN_FILE.
 
 		Exemplo de token com 12 meses de validade:
 
 		  $ rhc authorization add --scopes read --note backup --expires-in \$((60*60*24*30*12))
+		  $ sudo su -c "echo 'TOKEN-DE-AUTORIZACAO-GERADO-ACIMA' > $TOKEN_FILE"
+		  $ sudo chmod 600 $TOKEN_FILE"
 
-		Variaveis de ambiente disponíveis:
+		Instalar
+		--------
 
-		  BACKUP_DIR      Diretorio raiz de backup
-		  TOKEN_FILE      Arquivo do token de autorizacao
+		Copie para um local do PATH e adicione a chamada na cron:
+
+		  ## instalando
+		  $ sudo cp -i backup-app /usr/sbin/
+		  $ sudo chmod +x /usr/sbin/backup-app
+
+		  ## incluindo na cron
+		  $ sudo su -c 'echo "/usr/sbin/backup-app --all" > /etc/cron.daily/openshift-backup-app'
+		  $ sudo su -c 'chmod +x /etc/cron.daily/openshift-backup-app'
 	EOF
 }
 
@@ -38,6 +50,7 @@ APPS=''
 for OPT; do
 	case "$1" in
 		--all) APPS='*';;
+		--dir=*) BACKUP_DIR="`echo $1|cut -d= -f2`";;
 		-*|--*) usage; exit 0;;
 		*) APPS+="$1 "
 	esac
@@ -58,12 +71,16 @@ set -u
 #
 #   $ rhc authorization add --scopes read --note backup --expires-in $((60*60*24*30*12))
 #
-echo Auth token: $TOKEN_FILE
+echo Backup root dir: $BACKUP_DIR
+echo Auth token file: $TOKEN_FILE
+echo
 TOKEN="$(<$TOKEN_FILE)"
 
 if [ -z "$APPS" ];  then
-	usage
-	exit 0
+	echo 'Informe um ou mais nomes de aplicaçao ou use o parâmetro "--all"'
+	echo "Para ajuda, digite:"
+	echo "$0 --help"
+	exit 1
 elif [ "$APPS" == '*' ]; then
 	# lista todos os apps
 	APPS=`yes | rhc apps --token "$TOKEN" | awk '/^[a-zA-Z0-9]+ @ http/{print $1}'`
@@ -79,7 +96,7 @@ for APP in $APPS; do
 	echo -n '--- '; date
 	echo Baixando snapshot: $APP
 	# baixa snapshot
-	TIMESTAMP=$(date +%s)
+	TIMESTAMP=$(date +%s.%N)
 	TARGZ="snapshot-$APP-$TIMESTAMP.tar.gz"
 	yes | rhc snapshot save --ssh "$SSH" --token "$TOKEN" --app "$APP" --filepath "$TARGZ" 2>&1 | awk '{print "--- " $0}'
 
@@ -100,7 +117,7 @@ for APP in $APPS; do
 	{
 		[ -d .git ] || git init
 		git add .
-		git commit -a -m "Backup automatico: $APP - $(date --date=@$TIMESTAMP)"
+		git commit -a -m "Backup automatico: $APP - $(date --date=@${TIMESTAMP})"
 	} >/dev/null
 	echo feito
 done
