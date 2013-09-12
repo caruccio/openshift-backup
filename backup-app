@@ -38,8 +38,8 @@ APPS=''
 for OPT; do
 	case "$1" in
 		--all) APPS='*';;
-		-h|--help) usage; exit 0;;
-		[a-z-A-Z0-9]) APPS+="$1 "
+		-*|--*) usage; exit 0;;
+		*) APPS+="$1 "
 	esac
 	shift
 done
